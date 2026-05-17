@@ -1,8 +1,7 @@
 {
-  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
   "name": "specnote",
   "version": "0.2.0",
-  "description": "Specnote MCP — OAuth 2.1 자동 인증 (첫 호출 시 browser 로 로그인 · MCP 2025-06-18 spec)",
+  "description": "Specnote MCP — OAuth 2.1 자동 인증 · Codex 호환",
   "author": {
     "name": "Dannect",
     "email": "wy@dannect.com",

@@ -1,8 +1,8 @@
 # Specnote MCP Plugin
 
-[Specnote](https://specnote.io) 의 spec/정책 시스템을 Claude Code 에서 자연어로 다루는 MCP plugin.
+[Specnote](https://specnote.io) 의 spec/정책 시스템을 Claude Code (또는 Codex) 에서 자연어로 다루는 MCP plugin.
 
-개발 중 Claude Code 가 자동으로 정책을 누적하고, spec 을 조회할 수 있어요. 매번 회의록·README 정리할 필요 없이 코드 변경과 동시에 spec 이 살아 있는 상태로 유지됩니다.
+**v0.2.0 — OAuth 2.1 자동 인증** (env 박는 토큰 방식 폐기). 첫 호출 시 brower 자동 로그인 → 토큰 자동 회전 → 30일간 재로그인 불필요.
 
 ---
 
@@ -16,66 +16,47 @@
 
 ---
 
-## 설치 — 3단계
+## 설치 (2단계)
 
-### 1. 사전 준비 — 토큰 발급
+### Claude Code
 
-[Specnote](https://specnote.io) → 로그인 → **마이페이지** → **MCP 연결** 탭 → "토큰 발급" 버튼 클릭.
-
-토큰 (`spnt_xxxxx...`) 이 한 번만 표시됩니다. 안전한 곳에 복사.
-
-### 2. 환경변수 박기
-
-본인 shell rc (`~/.zshrc` 또는 `~/.bashrc`) 에:
-
-```bash
-export SPECNOTE_TOKEN="spnt_xxxxx..."
-```
-
-저장 후 새 터미널 또는 `source ~/.zshrc`.
-
-### 3. Plugin 설치
-
-Claude Code 안에서:
+Claude Code 안에서 다음 두 명령:
 
 ```
 /plugin marketplace add Dannect/specnote-mcp
 /plugin install specnote@specnote-mcp
 ```
 
-설치 후 `claude mcp list` 에서 `specnote ✓ Connected` 확인.
+설치 직후 첫 MCP 호출 (예: "specnote 에 내 프로젝트 list 해줘") 시 **자동으로 brower 가 열려 Specnote 로그인** → 권한 허용 → 끝.
+
+토큰 발급·env 박기 불필요. Claude Code 가 OAuth 2.1 표준으로 모든 인증/회전을 자동 처리.
+
+### Codex
+
+같은 plugin 이 Codex 도 지원 (`.codex-plugin/` 디렉토리 박혀있음). 설치 방법은 Codex 표준 따름.
 
 ---
 
 ## Dev / Prod 자동 전환
 
-Specnote 본체 레포 (`Dannect/specnote`) 에서 dev 서버 (`pnpm dev`) 띄워 작업할 때는 dev URL 로 자동 전환:
+기본 URL = `https://specnote.io/api/mcp/mcp` (production).
 
-### 방법 1 — direnv (권장 · 자동)
+Specnote 본체 코드를 로컬에서 개발할 때 (`pnpm dev`) 는 환경변수로 dev URL override:
 
-Specnote 레포 폴더에 `.envrc` 박혀 있음. [direnv](https://direnv.net) 설치 후:
+```bash
+export SPECNOTE_URL="http://localhost:3000/api/mcp/mcp"
+```
+
+또는 specnote 레포 폴더의 `.envrc` + [direnv](https://direnv.net) 가 자동 처리:
 
 ```bash
 brew install direnv
-echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc   # bash 면 bash
-source ~/.zshrc
-
+echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc
 cd /path/to/specnote
 direnv allow
 ```
 
-이제 Specnote 폴더 진입 = dev URL (`http://localhost:3000/api/mcp/mcp`) 자동 박힘.
-폴더 나가면 = prod URL (`https://specnote.io/api/mcp/mcp`) 자동 복귀.
-
-### 방법 2 — 수동 env
-
-```bash
-# dev 시
-export SPECNOTE_URL="http://localhost:3000/api/mcp/mcp"
-
-# prod 시 (또는 새 터미널)
-unset SPECNOTE_URL
-```
+이제 Specnote 폴더 진입 = dev URL 자동, 폴더 나가면 = prod URL 자동.
 
 ---
 
@@ -83,8 +64,9 @@ unset SPECNOTE_URL
 
 | 변수 | 필수 | 기본값 | 설명 |
 |---|---|---|---|
-| `SPECNOTE_TOKEN` | ✓ | (없음) | Personal Access Token (`spnt_` prefix · 마이페이지에서 발급) |
 | `SPECNOTE_URL` | ✗ | `https://specnote.io/api/mcp/mcp` | MCP endpoint URL. dev 시 override |
+
+**v0.2.0 부터 `SPECNOTE_TOKEN` 불필요** — OAuth 2.1 가 자동 토큰 발급/저장/회전 처리.
 
 ---
 
@@ -92,13 +74,15 @@ unset SPECNOTE_URL
 
 | 항목 | 정책 |
 |---|---|
-| **토큰 저장** | 사용자 shell rc 또는 secrets manager. **plugin 안 절대 박지 마세요** |
-| **토큰 노출** | 발급 직후 한 번만 표시. 잃어버리면 마이페이지에서 재발급 (옛 토큰 자동 폐기) |
-| **토큰 단일성** | 사용자 1인당 활성 토큰 1개. 새 발급 시 기존 토큰 즉시 무효 |
-| **DB 저장** | 서버는 SHA-256 hash 만 보관 — 토큰 원본 복원 불가 |
-| **scope** | `mcp:read` (조회) + `mcp:push` (정책 추가). 다른 권한 없음 |
+| **인증 방식** | OAuth 2.1 — Authorization Code + PKCE (S256) |
+| **토큰 저장** | Claude Code 의 secure storage (사용자가 직접 다룸 X) |
+| **DB 저장** | Specnote 서버는 SHA-256 hash 만 보관 — 토큰 원본 복원 불가 |
+| **Access token TTL** | 1시간 (자동 회전) |
+| **Refresh token TTL** | 30일 (회전 + reuse detection) |
+| **권한 (scope)** | `mcp:read` (조회) + `mcp:push` (정책 추가) |
+| **폐기** | Specnote 마이페이지 → MCP 연결 → "폐기" 버튼 (해당 client 의 모든 토큰 즉시 무효) |
 
-> ⚠ 토큰이 유출됐다 싶으면 즉시 마이페이지에서 재발급. 옛 토큰 자동 폐기되어 무효화됩니다.
+> ⚠ 보안 사고 의심 시 즉시 마이페이지에서 해당 client 폐기.
 
 ---
 
@@ -110,22 +94,34 @@ unset SPECNOTE_URL
 | `add_policy` | specId · pillar (`promise`·`limit`·`future`) · area · path · text · sourceFile? | PolicyHub 에 1건 추가. 권한 검증 후 즉시 반영 |
 | `list_policies` | specId | 해당 프로젝트의 모든 정책 |
 
-자연어 요청만 하시면 됩니다 — tool 이름 직접 외울 필요 없음. Claude Code 가 자동 라우팅.
+자연어 요청만 하시면 됩니다 — tool 이름 직접 외울 필요 없음. Claude Code/Codex 가 자동 라우팅.
 
 ---
 
 ## 트러블슈팅
 
 ### `Failed to connect`
-- `SPECNOTE_TOKEN` 박혀있는지: `echo $SPECNOTE_TOKEN`
 - URL 정상인지: `curl -i $SPECNOTE_URL` → 401 (auth 살아있음) 또는 200 기대
 - dev 시 specnote 서버 띄워졌는지: `curl http://localhost:3000` → 200
+- OAuth 자동 flow 진입 안 됨 → Claude Code 재시작 후 재시도
 
-### `❌ 인증 실패`
-토큰 만료 또는 폐기됨. 마이페이지에서 재발급.
+### `❌ 인증 실패` (419)
+Refresh token 회전 chain 오류 (reuse detection). 마이페이지에서 해당 client 폐기 → 다시 호출 시 자동 재인증.
 
 ### `❌ 프로젝트(...)에 권한이 없거나 존재하지 않습니다`
 다른 사용자의 프로젝트 ID 를 요청했거나, 삭제된 프로젝트. `list_specs` 로 확인.
+
+---
+
+## v0.1.0 → v0.2.0 Migration
+
+v0.1.0 사용자라면:
+1. `~/.zshrc` 또는 `~/.zshenv` 의 `SPECNOTE_TOKEN` env 라인 제거 (선택)
+2. Specnote 마이페이지의 옛 PAT (`spnt_*`) 폐기 (선택)
+3. Plugin 업데이트 — Claude Code 안에서 `/plugin update specnote@specnote-mcp`
+4. 다음 MCP 호출 시 brower 자동 OAuth
+
+기존 PAT 도 그대로 작동 (호환성 유지 — dev 직접 호출용).
 
 ---
 
