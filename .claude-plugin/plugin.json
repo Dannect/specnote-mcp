@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "specnote",
+  "version": "0.1.0",
+  "description": "Specnote MCP — Claude Code 에서 프로젝트 spec/정책을 자동 누적 관리",
+  "author": {
+    "name": "Dannect",
+    "email": "wy@dannect.com",
+    "url": "https://dannect.com"
+  },
+  "homepage": "https://specnote.io",
+  "repository": "https://github.com/Dannect/specnote-mcp",
+  "license": "MIT",
+  "keywords": ["specnote", "mcp", "spec", "policy", "documentation", "dannect"],
+  "mcpServers": {
+    "specnote": {
+      "type": "http",
+      "url": "${SPECNOTE_URL:-https://specnote.io/api/mcp/mcp}",
+      "headers": {
+        "Authorization": "Bearer ${SPECNOTE_TOKEN}"
+      }
+    }
+  }
+}

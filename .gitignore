@@ -1,0 +1,21 @@
+# 토큰·인증 — 절대 commit 금지
+.env
+.env.*
+*.token
+*.key
+*.pem
+secrets/
+.specnote/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# direnv 로컬 override (.envrc.local 만, .envrc 는 commit 가능)
+.envrc.local
