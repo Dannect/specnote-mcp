@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "specnote-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Specnote MCP plugin marketplace — 단일 plugin (specnote)",
   "owner": {
     "name": "Dannect",
@@ -12,7 +12,7 @@
     {
       "name": "specnote",
       "description": "Specnote MCP — Claude Code 에서 프로젝트 spec/정책을 자동 누적 관리",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "source": "./",
       "category": "productivity"
     }

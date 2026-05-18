@@ -1,0 +1,170 @@
+---
+name: register-all-real-screens
+description: Specnote spec 에 사용자 프로젝트의 모든 실 화면(Next.js page.tsx · 비슷한 framework 의 화면 라우트)을 한 번에 자동 디스커버리·등록. hardcoded list 의존 X, stale 영구 차단. 사용자가 "실 화면 다 등록해줘" / "전체 화면 sync" / "page list 박아줘" 같은 자연어 요청 시 발동.
+allowed-tools: Bash, Read, Glob, mcp__specnote__list_specs, mcp__specnote__add_realframe, mcp__specnote__list_policies
+---
+
+# 모든 실 화면 일괄 등록 (Skill)
+
+## 0. 핵심 원칙
+
+> **사용자가 화면 신규 추가/삭제할 때마다 수동으로 list 갱신할 필요 0 — 자동 디스커버리.**
+> hardcoded `PAGES` 배열 의존하면 stale 사고 (이전 v31 v5 e2e 스크립트 학습).
+
+---
+
+## 1. 발동 트리거
+
+| 패턴 | 동작 |
+|---|---|
+| "실 화면 다 등록해줘" / "전체 화면 등록" / "page 일괄 등록" | 즉시 발동 |
+| "내 프로젝트 화면 sync" / "코드 화면 다 박아줘" | 즉시 발동 |
+| "spec 에 화면 등록" + "전체" / "다" / "일괄" | 즉시 발동 |
+| 단일 화면 등록 1회 ("이 페이지만 등록") | 발동 X — `add_realframe` 직접 호출 |
+
+---
+
+## 2. 표준 흐름 (5 단계 강제)
+
+### Step 1 — 대상 Spec 확정 (Spec ambiguity 차단)
+
+```
+1-A. `mcp__specnote__list_specs` 호출 → 사용자 spec 목록 fetch
+1-B. spec 1개면 자동 선택
+1-C. 2개+ 면 사용자에게 명시 질문:
+     "어느 spec 에 등록할까요?
+      1. <spec1 title> (cmp...)
+      2. <spec2 title> (cmp...)"
+1-D. 사용자가 spec id 명시 후 진행
+```
+
+**금지**: spec 못 찾으면 임의 spec 에 박지 말 것. 반드시 명시 확인.
+
+### Step 2 — 화면 라우트 자동 디스커버리 (framework 별)
+
+framework 자동 감지 + 해당 패턴으로 page 자동 list.
+
+| framework | 감지 신호 | 화면 라우트 패턴 |
+|---|---|---|
+| **Next.js App Router** | `src/app/` 존재 + `next.config.*` | `src/app/**/page.{tsx,ts,jsx,js}` |
+| **Next.js Pages Router** | `pages/` 또는 `src/pages/` 존재 | `(src/)?pages/**/*.{tsx,ts,jsx,js}` (단 `_app` · `_document` · `api/` 제외) |
+| **SvelteKit** | `src/routes/` + `svelte.config.*` | `src/routes/**/+page.svelte` |
+| **Remix** | `app/routes/` + `remix.config.*` | `app/routes/**/*.{tsx,ts,jsx,js}` |
+| **기타** | 사용자에게 명시 질문 | 사용자가 패턴 알려줌 |
+
+**Bash 명령 예시 (Next.js App Router)**:
+```bash
+find src/app -type f \( -name "page.tsx" -o -name "page.ts" -o -name "page.jsx" -o -name "page.js" \) | sort
+```
+
+### Step 3 — 라우트·라벨·group 자동 추론
+
+각 page 파일에서 다음을 추론:
+
+| 항목 | 추론 규칙 |
+|---|---|
+| **route** (URL 경로) | `src/app/[locale]/login/page.tsx` → `/[locale]/login` |
+| **screenId** (식별자) | route 의 의미 segment → `"auth/login"` 형식 (`<group>/<name>` · lowercase · hyphen) |
+| **label** (한국어 노출 이름) | 폴더 이름 한국어 사전 매핑 (login → "로그인", signup → "가입", dashboard → "대시보드", onboarding → "온보딩", board → "보드", mypage → "마이페이지", admin → "관리자") + 모르면 폴더 이름 그대로 |
+| **group** (5 카테고리) | 폴더 이름 → 매핑 표 참조 (아래) |
+| **componentName** | page.tsx 안 `export default function <Name>()` 패턴 grep |
+| **visibleTexts** | page.tsx 안 한국어 문자열 (>2자) 최대 50개 추출 |
+
+**group 매핑 표 (Specnote 기본)**:
+
+```
+auth: login, signup, verify-email, forgot-password, reset-password, oauth, signup/terms-consent
+onb: onboarding/*
+board: board/*
+dash: dashboard, mypage, mypage/*, admin/*
+marketing: / (root locale page), checkout (있을 경우)
+```
+
+**금지**:
+- ❌ 코드에 없는 path 미리 박지 말 것 (예: 미래 checkout 가정)
+- ❌ "marketing" 같은 group 을 폴더 없는데 박지 말 것 — 단 `[locale]/page.tsx` (root 랜딩) 는 `marketing/landing` OK (관례)
+- ❌ group 분류 모호하면 사용자에게 명시 질문
+
+### Step 4 — 각 page 마다 `add_realframe` 호출 (병렬)
+
+```
+for each discovered page:
+  mcp__specnote__add_realframe({
+    specId: <Step 1 확정 id>,
+    screenId: <Step 3 추론>,
+    label: <Step 3 추론>,
+    group: <Step 3 추론>,
+    sourceUrl: <상대 경로 — src/app/.../page.tsx>,
+    route: <Step 3 추론>,
+    componentName: <Step 3 grep 결과>,
+    visibleTexts: <Step 3 grep 결과>,
+    hasAuth: <heuristic — Auth 관련 import 있나>,
+    hasForm: <heuristic — form/input 있나>,
+    hasDataFetch: <heuristic — fetch/prisma/use server 있나>
+  })
+```
+
+**병렬 권장** — 5-10개 동시 호출 (네트워크 latency 절감).
+
+### Step 5 — 결과 보고
+
+마지막에 사용자에게 표 형식 보고:
+
+```
+✅ 실 화면 N개 등록 완료 ({specTitle})
+
+| screenId | label | group | sourceUrl |
+|---|---|---|---|
+| auth/login | 로그인 | auth | src/app/[locale]/login/page.tsx |
+| ...
+
+⚠️ 실패 K건 (있을 시):
+- <screenId>: <reason>
+```
+
+---
+
+## 3. 절대 금지 (ZERO TOLERANCE)
+
+- ❌ 사용자에게 묻지 말고 임의 spec 에 박지 말 것 (Step 1-D 명시 확인 필수)
+- ❌ 코드에 없는 미래 가정 page (예: checkout) 미리 박지 말 것 — 실 file 존재 검증 후 등록
+- ❌ hardcoded PAGES list 사용 절대 금지 (이번 작업의 본질 = 자동 디스커버리)
+- ❌ group 분류 모호하면 임의로 박지 말고 사용자 확인
+- ❌ visibleTexts 에 비밀번호·토큰·이메일 같은 PII 포함 시 마스킹
+
+---
+
+## 4. 사용자 옵션 (자연어로 받기)
+
+사용자가 다음 옵션 명시할 수 있음:
+
+| 옵션 | 의미 |
+|---|---|
+| "특정 폴더만" (예: "auth 폴더만") | 해당 group 만 등록 |
+| "기존 거 다 지우고 다시" | 기존 등록 frame soft delete 후 재등록 (cleanup mode) |
+| "신규만" (default) | 이미 등록된 sourceUrl 은 update, 신규만 create |
+| "dryrun" | 실 등록 X, list 만 보여줌 (사용자 확인 후 본 실행) |
+
+---
+
+## 5. 결과 후 다음 단계 권장
+
+등록 완료 후 사용자에게 안내:
+
+- 🔗 board URL: `https://specnote.io/ko/board/{specId}` (또는 localhost dev)
+- "다음 추천: `mcp__specnote__add_scenario` 로 사용자 시나리오도 박아보세요"
+- "정책 누락분 확인: `mcp__specnote__list_policies({specId})` 후 add_policy"
+
+---
+
+## 6. 한계 (사용자에게 명시)
+
+- MCP server 는 사용자 file system 접근 X → 디스커버리는 **Claude Code 가 사용자 PC 에서 직접 수행**
+- group 자동 추론 = heuristic — 다넥트 Specnote 패턴 기준. 다른 회사 프로젝트면 약간 어색할 수 있음 (사용자 보고 후 수정 가능)
+- chokidar 같은 file watch 자동화는 별도 phase (현재는 사용자가 호출 시점에만 sync)
+
+---
+
+## 7. 발생 이력
+
+- **2026-05-19 v0.4.0** 신설 — 이전 v31 v5 e2e 스크립트 (`scripts/dev-e2e-register-all.ts`) 의 hardcoded PAGES 11개 stale 사고 학습. checkout 3건 (코드 없는 미래 가정) + label 11개 누락 사고 → 자동 디스커버리 영구 fix.
