@@ -1,7 +1,7 @@
 ---
 name: register-all-real-screens
 description: Specnote spec 에 사용자 프로젝트의 모든 실 화면(Next.js page.tsx · 비슷한 framework 의 화면 라우트)을 한 번에 자동 디스커버리·등록. hardcoded list 의존 X, stale 영구 차단. v37 wave 2 (2026-05-19) — DOM serialization 으로 갈아엎음. PNG 캡처 대신 outerHTML + computed CSS 추출 → 서버 측 DOMPurify sanitize → DB 박힘 → board iframe srcdoc 으로 Figma prototype 같이 렌더 (텍스트 select · 컴포넌트 hover · vector 줌 · CSS 애니메이션 OK). 사용자가 "실 화면 다 등록해줘" / "전체 화면 sync" / "page list 박아줘" 같은 자연어 요청 시 발동.
-allowed-tools: Bash, Read, Glob, mcp__specnote__list_specs, mcp__specnote__add_realframe, mcp__specnote__list_policies
+allowed-tools: Bash, Read, Glob, mcp__specnote__list_specs, mcp__specnote__add_realframe, mcp__specnote__list_policies, mcp__specnote__list_groups, mcp__specnote__add_group, mcp__specnote__set_group_folder_rules
 ---
 
 # 모든 실 화면 일괄 등록 (Skill)
@@ -85,6 +85,28 @@ marketing: / (root locale page), checkout (있을 경우)
 - ❌ "marketing" 같은 group 을 폴더 없는데 박지 말 것 — 단 `[locale]/page.tsx` (root 랜딩) 는 `marketing/landing` OK (관례)
 - ❌ group 분류 모호하면 사용자에게 명시 질문
 
+### Step 3-A — 자동 그룹 생성 (v0.6.0 — 2026-05-19)
+
+discovered pages 의 group 카테고리별로 Group row 자동 신설. 사용자가 board UI 에서 화면을 group 별로 정리해서 보게 됨.
+
+```
+3-A-1. mcp__specnote__list_groups({ specId }) → 기존 group list
+3-A-2. discovered pages 의 사용된 group 카테고리 set 추출 (marketing/auth/onb/dash/board)
+3-A-3. 사용되었지만 기존 group 없는 카테고리만 새로 생성:
+       mcp__specnote__add_group({
+         specId,
+         name: "마케팅" | "인증" | "대시보드" | "온보딩" | "보드",
+         icon: "megaphone" | "lock" | "layout-dashboard" | "sparkles" | "presentation",
+         color: "#F59E0B" | "#9363DA" | "#06B6D4" | "#10B981" | "#FF6700",
+         folderRules: ["login","signup","oauth",...]  // 카테고리별 folder pattern
+       })
+3-A-4. 카테고리 → groupId 매핑 보관 (Map<GroupKey, groupId>)
+```
+
+**금지**:
+- ❌ 사용된 카테고리 외 group 미리 생성 (필요한 것만)
+- ❌ 기존 group 이름 덮어쓰기 (있으면 skip)
+
 ### Step 4 — 각 page 마다 `add_realframe` 호출 (병렬)
 
 #### 4-1. Playwright 로 화면 캡처 + DOM 추출 (사용자 PC dev server 띄운 상태)
@@ -132,7 +154,9 @@ for each discovered page:
     hasDataFetch: <heuristic — fetch/prisma/use server 있나>,
     // v37 wave 2 — DOM serialization (선택 · 권장)
     domHtml: dom.html,  // ← 4-1 의 HTML
-    domCss: dom.css     // ← 4-1 의 CSS
+    domCss: dom.css,    // ← 4-1 의 CSS
+    // v0.6.0 (2026-05-19) — 자동 group 매핑
+    groupId: <Step 3-A 의 groupKeyToId.get(group)>  // ← 박힘 보장
   })
 ```
 
@@ -210,3 +234,5 @@ for each discovered page:
 ## 7. 발생 이력
 
 - **2026-05-19 v0.4.0** 신설 — 이전 v31 v5 e2e 스크립트 (`scripts/dev-e2e-register-all.ts`) 의 hardcoded PAGES 11개 stale 사고 학습. checkout 3건 (코드 없는 미래 가정) + label 11개 누락 사고 → 자동 디스커버리 영구 fix.
+- **2026-05-19 v0.5.0** DOM serialization 도입 — PNG 캡처 → outerHTML + computed CSS 추출. board iframe srcdoc 으로 Figma prototype 같이 렌더 (텍스트 select · hover · 줌 · 애니메이션 OK). 서버 측 DOMPurify sanitize + iframe sandbox + CSP 3-layer 격리.
+- **2026-05-19 v0.6.0** 자동 group 매핑 — register 시 groupId 박힘 → Wireframe.groupId 즉시 set. Step 3-A 에서 사용된 카테고리만 group 자동 신설 (마케팅/인증/대시보드/온보딩/보드). 사용자가 board UI 에서 화면을 카테고리별 column 으로 보게 됨. dev-e2e-register-all.ts e2e 검증 통과 (22 화면 + 5 그룹).
