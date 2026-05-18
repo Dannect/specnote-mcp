@@ -113,28 +113,59 @@ discovered pages 의 group 카테고리별로 Group row 자동 신설. 사용자
 
 v37 wave 2 (2026-05-19) — DOM serialization 표준. PNG 보다 풍부 (텍스트 select · 컴포넌트 hover · vector 줌 · CSS 애니메이션).
 
+**v0.7.0 (2026-05-19) — 2 contexts 분기 (MANDATORY · 사용자 PS 진단 박힘)**:
+
+비인증 페이지 (`/`, `/login`, `/signup`, `/forgot-password`, `/oauth/*` 등) 를 인증 cookies 박힌 채 진입하면 → 서버가 dashboard 으로 redirect → **잘못된 본문 캡처**. 반드시 group 기반 cookies 분기:
+
+| group | cookies | 이유 |
+|---|---|---|
+| `marketing` (랜딩 · checkout) | **fresh** (cookies X) | 로그인 시 dashboard redirect |
+| `auth` (login · signup · oauth · verify · reset) | **fresh** (cookies X) | 동일 — 로그인된 사용자에게 redirect |
+| `onb` (온보딩) | **authed** | spec 등록 필요 → 로그인 필수 |
+| `dash` (dashboard · mypage · admin) | **authed** | 인증 필수 |
+| `board` | **authed** | 인증 + spec 권한 필수 |
+
 ```typescript
-// packages/mcp 의 captureScreenshot 또는 직접 Playwright
+// v37 wave 2 + wave 7 + wave 8 풀 사이클
 import { chromium } from "playwright";
-const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 1920, height: 1080 }});
-// 인증 cookies (사용자 로그인 상태) — dev/staging 만 권장
-await page.context().addCookies([{ name: "...", value: "...", domain: "localhost", path: "/" }]);
-await page.goto(`http://localhost:3000${urlPath}`, { waitUntil: "domcontentloaded" });
 
-// DOM 추출 (outerHTML + computed CSS)
-const dom = await page.evaluate(() => ({
-  html: document.documentElement.outerHTML,
-  css: Array.from(document.styleSheets).flatMap(s => {
-    try { return Array.from(s.cssRules).map(r => r.cssText); }
-    catch (e) { return []; } // cross-origin sheet skip
-  }).join("\n")
-}));
+// 인증 cookies 미리 확보 (login flow)
+const authCookies = await loginAndGetCookies();
 
-// 크기 가드 (서버 측 sanitize 전 한도)
-if (dom.html.length > 2_000_000) throw new Error(`HTML too large: ${dom.html.length}`);
-if (dom.css.length > 1_000_000) throw new Error(`CSS too large: ${dom.css.length}`);
+for (const page of discoveredPages) {
+  // v0.7.0 — group 기반 cookies 분기 (ZERO TOLERANCE)
+  const isPublicPage = page.group === "marketing" || page.group === "auth";
+  const cookies = isPublicPage ? [] : authCookies;
+
+  const browser = await chromium.launch();
+  const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }});
+  if (cookies.length > 0) await ctx.addCookies(cookies);
+  const pw = await ctx.newPage();
+  await pw.goto(`http://localhost:3000${page.urlPath}`, { waitUntil: "domcontentloaded" });
+
+  // v0.6.x — React hydration 완료 대기 (client-only 페이지 빈 본문 사고 방지)
+  try { await pw.waitForLoadState("networkidle", { timeout: 5000 }); } catch {}
+  await pw.waitForTimeout(1000);
+
+  // DOM 추출
+  const dom = await pw.evaluate(() => ({
+    html: document.documentElement.outerHTML,
+    css: Array.from(document.styleSheets).flatMap(s => {
+      try { return Array.from(s.cssRules).map(r => r.cssText); }
+      catch (e) { return []; }
+    }).join("\n")
+  }));
+  if (dom.html.length > 2_000_000) throw new Error(`HTML too large: ${dom.html.length}`);
+  if (dom.css.length > 1_000_000) throw new Error(`CSS too large: ${dom.css.length}`);
+
+  await browser.close();
+  // add_realframe 호출 (4-2 참조)
+}
 ```
+
+**금지** (ZERO TOLERANCE):
+- ❌ 모든 페이지를 같은 cookies 컨텍스트로 캡처 → 비인증 페이지 본문 깨짐
+- ❌ `waitUntil: "load"` 만 하고 hydration 대기 skip → client-only 페이지 빈 본문
 
 #### 4-2. add_realframe MCP 호출 (병렬)
 
@@ -236,3 +267,4 @@ for each discovered page:
 - **2026-05-19 v0.4.0** 신설 — 이전 v31 v5 e2e 스크립트 (`scripts/dev-e2e-register-all.ts`) 의 hardcoded PAGES 11개 stale 사고 학습. checkout 3건 (코드 없는 미래 가정) + label 11개 누락 사고 → 자동 디스커버리 영구 fix.
 - **2026-05-19 v0.5.0** DOM serialization 도입 — PNG 캡처 → outerHTML + computed CSS 추출. board iframe srcdoc 으로 Figma prototype 같이 렌더 (텍스트 select · hover · 줌 · 애니메이션 OK). 서버 측 DOMPurify sanitize + iframe sandbox + CSP 3-layer 격리.
 - **2026-05-19 v0.6.0** 자동 group 매핑 — register 시 groupId 박힘 → Wireframe.groupId 즉시 set. Step 3-A 에서 사용된 카테고리만 group 자동 신설 (마케팅/인증/대시보드/온보딩/보드). 사용자가 board UI 에서 화면을 카테고리별 column 으로 보게 됨. dev-e2e-register-all.ts e2e 검증 통과 (22 화면 + 5 그룹).
+- **2026-05-19 v0.7.0** 2 contexts 분기 (PS 진단 박힘) — 사용자 사고: auth/login 캡처가 dashboard 본문으로 박힘. 원인: 모든 페이지를 인증 cookies 박힌 채 캡처 → 비인증 페이지가 서버 redirect. 해결: group 기반 분기 (marketing/auth = fresh / 그 외 = authed) + React hydration networkidle+1s wait. ScreenCard footer label 우선 표시 (영문 screenId 노출 차단).
