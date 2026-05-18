@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0 — 2026-05-18
+
+### BREAKING
+- `mcpServers.specnote.url` 의 env substitution `${SPECNOTE_URL:-...}` 제거 → prod URL hardcode.
+  - 이전 사고: substitution 이 default 만 박혀서 "Failed to connect" 발생.
+  - 영구 차단: plugin = prod URL 고정. dev 는 별도 `claude mcp add specnote-dev` 명령으로 등록.
+- `SPECNOTE_URL` env 의존 제거. v0.3.0 부터 plugin 환경변수 0개.
+
+### Changed
+- README "Dev / Prod 분리" 섹션 갈아엎기 — env override → 수동 등록 명령 안내.
+- Troubleshooting `Failed to connect` 섹션 갱신 (env 참조 제거 + prod URL hardcode 확인 명령).
+
+### Migration (0.2.0 → 0.3.0)
+1. `~/.zshrc` 등의 `SPECNOTE_URL` env 라인 제거 (있다면)
+2. `/plugin update specnote@specnote-mcp` — Plugin 자동 갱신
+3. Dev 사용자: `claude mcp add specnote-dev http://localhost:3000/api/mcp/mcp --transport http`
+
 ## 0.2.0 — 2026-05-18
 
 ### BREAKING
