@@ -1,6 +1,6 @@
 ---
 name: register-all-real-screens
-description: Specnote spec 에 사용자 프로젝트의 모든 실 화면(Next.js page.tsx · 비슷한 framework 의 화면 라우트)을 한 번에 자동 디스커버리·등록. hardcoded list 의존 X, stale 영구 차단. 사용자가 "실 화면 다 등록해줘" / "전체 화면 sync" / "page list 박아줘" 같은 자연어 요청 시 발동.
+description: Specnote spec 에 사용자 프로젝트의 모든 실 화면(Next.js page.tsx · 비슷한 framework 의 화면 라우트)을 한 번에 자동 디스커버리·등록. hardcoded list 의존 X, stale 영구 차단. v37 wave 2 (2026-05-19) — DOM serialization 으로 갈아엎음. PNG 캡처 대신 outerHTML + computed CSS 추출 → 서버 측 DOMPurify sanitize → DB 박힘 → board iframe srcdoc 으로 Figma prototype 같이 렌더 (텍스트 select · 컴포넌트 hover · vector 줌 · CSS 애니메이션 OK). 사용자가 "실 화면 다 등록해줘" / "전체 화면 sync" / "page list 박아줘" 같은 자연어 요청 시 발동.
 allowed-tools: Bash, Read, Glob, mcp__specnote__list_specs, mcp__specnote__add_realframe, mcp__specnote__list_policies
 ---
 
@@ -87,6 +87,35 @@ marketing: / (root locale page), checkout (있을 경우)
 
 ### Step 4 — 각 page 마다 `add_realframe` 호출 (병렬)
 
+#### 4-1. Playwright 로 화면 캡처 + DOM 추출 (사용자 PC dev server 띄운 상태)
+
+v37 wave 2 (2026-05-19) — DOM serialization 표준. PNG 보다 풍부 (텍스트 select · 컴포넌트 hover · vector 줌 · CSS 애니메이션).
+
+```typescript
+// packages/mcp 의 captureScreenshot 또는 직접 Playwright
+import { chromium } from "playwright";
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1920, height: 1080 }});
+// 인증 cookies (사용자 로그인 상태) — dev/staging 만 권장
+await page.context().addCookies([{ name: "...", value: "...", domain: "localhost", path: "/" }]);
+await page.goto(`http://localhost:3000${urlPath}`, { waitUntil: "domcontentloaded" });
+
+// DOM 추출 (outerHTML + computed CSS)
+const dom = await page.evaluate(() => ({
+  html: document.documentElement.outerHTML,
+  css: Array.from(document.styleSheets).flatMap(s => {
+    try { return Array.from(s.cssRules).map(r => r.cssText); }
+    catch (e) { return []; } // cross-origin sheet skip
+  }).join("\n")
+}));
+
+// 크기 가드 (서버 측 sanitize 전 한도)
+if (dom.html.length > 2_000_000) throw new Error(`HTML too large: ${dom.html.length}`);
+if (dom.css.length > 1_000_000) throw new Error(`CSS too large: ${dom.css.length}`);
+```
+
+#### 4-2. add_realframe MCP 호출 (병렬)
+
 ```
 for each discovered page:
   mcp__specnote__add_realframe({
@@ -100,11 +129,24 @@ for each discovered page:
     visibleTexts: <Step 3 grep 결과>,
     hasAuth: <heuristic — Auth 관련 import 있나>,
     hasForm: <heuristic — form/input 있나>,
-    hasDataFetch: <heuristic — fetch/prisma/use server 있나>
+    hasDataFetch: <heuristic — fetch/prisma/use server 있나>,
+    // v37 wave 2 — DOM serialization (선택 · 권장)
+    domHtml: dom.html,  // ← 4-1 의 HTML
+    domCss: dom.css     // ← 4-1 의 CSS
   })
 ```
 
+**서버 측 자동 sanitize**:
+- DOMPurify (script · onclick · iframe · object · embed 제거)
+- inline style 의 expression() · javascript: URL 후처리
+- CSS @import · data:text/html 차단
+- 사용자는 sanitize 신경 X — push 만 하면 안전 보장
+
+**Board 안 렌더**: iframe srcdoc + sandbox="" + CSP meta 으로 3-layer 격리.
+
 **병렬 권장** — 5-10개 동시 호출 (네트워크 latency 절감).
+
+**용량**: 1 화면 평균 500KB~2MB (PNG 200KB 의 10x). 50 화면 ≈ 25MB · DB Postgres TEXT 박힘 OK.
 
 ### Step 5 — 결과 보고
 
