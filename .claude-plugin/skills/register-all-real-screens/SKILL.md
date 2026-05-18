@@ -147,7 +147,10 @@ for (const page of discoveredPages) {
   try { await pw.waitForLoadState("networkidle", { timeout: 5000 }); } catch {}
   await pw.waitForTimeout(1000);
 
-  // DOM 추출
+  // DOM 추출 — html 통째 강제 (v0.8.0 — <html class="dark/light"> theme attr 보존 필수)
+  //   document.documentElement.outerHTML = <html> 통째. body 만 뽑으면 X.
+  //   서버 측 buildIframeSrcdoc 가 원본 html 그대로 보존 + head 안 base/CSP/css inject
+  //   → light/dark theme · color-scheme 등 모든 root attribute 그대로 박힘
   const dom = await pw.evaluate(() => ({
     html: document.documentElement.outerHTML,
     css: Array.from(document.styleSheets).flatMap(s => {
@@ -268,3 +271,4 @@ for each discovered page:
 - **2026-05-19 v0.5.0** DOM serialization 도입 — PNG 캡처 → outerHTML + computed CSS 추출. board iframe srcdoc 으로 Figma prototype 같이 렌더 (텍스트 select · hover · 줌 · 애니메이션 OK). 서버 측 DOMPurify sanitize + iframe sandbox + CSP 3-layer 격리.
 - **2026-05-19 v0.6.0** 자동 group 매핑 — register 시 groupId 박힘 → Wireframe.groupId 즉시 set. Step 3-A 에서 사용된 카테고리만 group 자동 신설 (마케팅/인증/대시보드/온보딩/보드). 사용자가 board UI 에서 화면을 카테고리별 column 으로 보게 됨. dev-e2e-register-all.ts e2e 검증 통과 (22 화면 + 5 그룹).
 - **2026-05-19 v0.7.0** 2 contexts 분기 (PS 진단 박힘) — 사용자 사고: auth/login 캡처가 dashboard 본문으로 박힘. 원인: 모든 페이지를 인증 cookies 박힌 채 캡처 → 비인증 페이지가 서버 redirect. 해결: group 기반 분기 (marketing/auth = fresh / 그 외 = authed) + React hydration networkidle+1s wait. ScreenCard footer label 우선 표시 (영문 screenId 노출 차단).
+- **2026-05-19 v0.8.0** light/dark theme 보존 — 사용자 사고: 카드 미리보기에 흰색 영역 노출. 원인: server buildIframeSrcdoc 가 새 `<html lang="ko">` 으로 wrap → 원본 `<html class="light">` class 잃음 → CSS theme vars 잘못 매핑. 해결: server 측 원본 html 그대로 보존 + head 안 base/CSP/css inject. MCP skill 측 `document.documentElement.outerHTML` (html 통째) 사용 명시 — body 만 뽑으면 X. 사용자 실 화면과 동일한 theme 표현.
