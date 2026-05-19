@@ -1,7 +1,7 @@
 ---
 name: register-all-real-screens
-description: Specnote spec 에 사용자 프로젝트의 모든 실 화면(Next.js page.tsx · 비슷한 framework 의 화면 라우트)을 한 번에 자동 디스커버리·등록. hardcoded list 의존 X, stale 영구 차단. 사용자가 "실 화면 다 등록해줘" / "전체 화면 sync" / "page list 박아줘" 같은 자연어 요청 시 발동.
-allowed-tools: Bash, Read, Glob, mcp__specnote__list_specs, mcp__specnote__add_realframe, mcp__specnote__list_policies
+description: Specnote spec 에 사용자 프로젝트의 모든 실 화면(Next.js page.tsx · 비슷한 framework 의 화면 라우트)을 한 번에 자동 디스커버리·등록. hardcoded list 의존 X, stale 영구 차단. v37 wave 2 (2026-05-19) — DOM serialization 으로 갈아엎음. PNG 캡처 대신 outerHTML + computed CSS 추출 → 서버 측 DOMPurify sanitize → DB 박힘 → board iframe srcdoc 으로 Figma prototype 같이 렌더 (텍스트 select · 컴포넌트 hover · vector 줌 · CSS 애니메이션 OK). 사용자가 "실 화면 다 등록해줘" / "전체 화면 sync" / "page list 박아줘" 같은 자연어 요청 시 발동.
+allowed-tools: Bash, Read, Glob, mcp__specnote__list_specs, mcp__specnote__add_realframe, mcp__specnote__list_policies, mcp__specnote__list_groups, mcp__specnote__add_group, mcp__specnote__set_group_folder_rules
 ---
 
 # 모든 실 화면 일괄 등록 (Skill)
@@ -85,7 +85,92 @@ marketing: / (root locale page), checkout (있을 경우)
 - ❌ "marketing" 같은 group 을 폴더 없는데 박지 말 것 — 단 `[locale]/page.tsx` (root 랜딩) 는 `marketing/landing` OK (관례)
 - ❌ group 분류 모호하면 사용자에게 명시 질문
 
+### Step 3-A — 자동 그룹 생성 (v0.6.0 — 2026-05-19)
+
+discovered pages 의 group 카테고리별로 Group row 자동 신설. 사용자가 board UI 에서 화면을 group 별로 정리해서 보게 됨.
+
+```
+3-A-1. mcp__specnote__list_groups({ specId }) → 기존 group list
+3-A-2. discovered pages 의 사용된 group 카테고리 set 추출 (marketing/auth/onb/dash/board)
+3-A-3. 사용되었지만 기존 group 없는 카테고리만 새로 생성:
+       mcp__specnote__add_group({
+         specId,
+         name: "마케팅" | "인증" | "대시보드" | "온보딩" | "보드",
+         icon: "megaphone" | "lock" | "layout-dashboard" | "sparkles" | "presentation",
+         color: "#F59E0B" | "#9363DA" | "#06B6D4" | "#10B981" | "#FF6700",
+         folderRules: ["login","signup","oauth",...]  // 카테고리별 folder pattern
+       })
+3-A-4. 카테고리 → groupId 매핑 보관 (Map<GroupKey, groupId>)
+```
+
+**금지**:
+- ❌ 사용된 카테고리 외 group 미리 생성 (필요한 것만)
+- ❌ 기존 group 이름 덮어쓰기 (있으면 skip)
+
 ### Step 4 — 각 page 마다 `add_realframe` 호출 (병렬)
+
+#### 4-1. Playwright 로 화면 캡처 + DOM 추출 (사용자 PC dev server 띄운 상태)
+
+v37 wave 2 (2026-05-19) — DOM serialization 표준. PNG 보다 풍부 (텍스트 select · 컴포넌트 hover · vector 줌 · CSS 애니메이션).
+
+**v0.7.0 (2026-05-19) — 2 contexts 분기 (MANDATORY · 사용자 PS 진단 박힘)**:
+
+비인증 페이지 (`/`, `/login`, `/signup`, `/forgot-password`, `/oauth/*` 등) 를 인증 cookies 박힌 채 진입하면 → 서버가 dashboard 으로 redirect → **잘못된 본문 캡처**. 반드시 group 기반 cookies 분기:
+
+| group | cookies | 이유 |
+|---|---|---|
+| `marketing` (랜딩 · checkout) | **fresh** (cookies X) | 로그인 시 dashboard redirect |
+| `auth` (login · signup · oauth · verify · reset) | **fresh** (cookies X) | 동일 — 로그인된 사용자에게 redirect |
+| `onb` (온보딩) | **authed** | spec 등록 필요 → 로그인 필수 |
+| `dash` (dashboard · mypage · admin) | **authed** | 인증 필수 |
+| `board` | **authed** | 인증 + spec 권한 필수 |
+
+```typescript
+// v37 wave 2 + wave 7 + wave 8 풀 사이클
+import { chromium } from "playwright";
+
+// 인증 cookies 미리 확보 (login flow)
+const authCookies = await loginAndGetCookies();
+
+for (const page of discoveredPages) {
+  // v0.7.0 — group 기반 cookies 분기 (ZERO TOLERANCE)
+  const isPublicPage = page.group === "marketing" || page.group === "auth";
+  const cookies = isPublicPage ? [] : authCookies;
+
+  const browser = await chromium.launch();
+  const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }});
+  if (cookies.length > 0) await ctx.addCookies(cookies);
+  const pw = await ctx.newPage();
+  await pw.goto(`http://localhost:3000${page.urlPath}`, { waitUntil: "domcontentloaded" });
+
+  // v0.6.x — React hydration 완료 대기 (client-only 페이지 빈 본문 사고 방지)
+  try { await pw.waitForLoadState("networkidle", { timeout: 5000 }); } catch {}
+  await pw.waitForTimeout(1000);
+
+  // DOM 추출 — html 통째 강제 (v0.8.0 — <html class="dark/light"> theme attr 보존 필수)
+  //   document.documentElement.outerHTML = <html> 통째. body 만 뽑으면 X.
+  //   서버 측 buildIframeSrcdoc 가 원본 html 그대로 보존 + head 안 base/CSP/css inject
+  //   → light/dark theme · color-scheme 등 모든 root attribute 그대로 박힘
+  const dom = await pw.evaluate(() => ({
+    html: document.documentElement.outerHTML,
+    css: Array.from(document.styleSheets).flatMap(s => {
+      try { return Array.from(s.cssRules).map(r => r.cssText); }
+      catch (e) { return []; }
+    }).join("\n")
+  }));
+  if (dom.html.length > 2_000_000) throw new Error(`HTML too large: ${dom.html.length}`);
+  if (dom.css.length > 1_000_000) throw new Error(`CSS too large: ${dom.css.length}`);
+
+  await browser.close();
+  // add_realframe 호출 (4-2 참조)
+}
+```
+
+**금지** (ZERO TOLERANCE):
+- ❌ 모든 페이지를 같은 cookies 컨텍스트로 캡처 → 비인증 페이지 본문 깨짐
+- ❌ `waitUntil: "load"` 만 하고 hydration 대기 skip → client-only 페이지 빈 본문
+
+#### 4-2. add_realframe MCP 호출 (병렬)
 
 ```
 for each discovered page:
@@ -100,11 +185,26 @@ for each discovered page:
     visibleTexts: <Step 3 grep 결과>,
     hasAuth: <heuristic — Auth 관련 import 있나>,
     hasForm: <heuristic — form/input 있나>,
-    hasDataFetch: <heuristic — fetch/prisma/use server 있나>
+    hasDataFetch: <heuristic — fetch/prisma/use server 있나>,
+    // v37 wave 2 — DOM serialization (선택 · 권장)
+    domHtml: dom.html,  // ← 4-1 의 HTML
+    domCss: dom.css,    // ← 4-1 의 CSS
+    // v0.6.0 (2026-05-19) — 자동 group 매핑
+    groupId: <Step 3-A 의 groupKeyToId.get(group)>  // ← 박힘 보장
   })
 ```
 
+**서버 측 자동 sanitize**:
+- DOMPurify (script · onclick · iframe · object · embed 제거)
+- inline style 의 expression() · javascript: URL 후처리
+- CSS @import · data:text/html 차단
+- 사용자는 sanitize 신경 X — push 만 하면 안전 보장
+
+**Board 안 렌더**: iframe srcdoc + sandbox="" + CSP meta 으로 3-layer 격리.
+
 **병렬 권장** — 5-10개 동시 호출 (네트워크 latency 절감).
+
+**용량**: 1 화면 평균 500KB~2MB (PNG 200KB 의 10x). 50 화면 ≈ 25MB · DB Postgres TEXT 박힘 OK.
 
 ### Step 5 — 결과 보고
 
@@ -168,3 +268,15 @@ for each discovered page:
 ## 7. 발생 이력
 
 - **2026-05-19 v0.4.0** 신설 — 이전 v31 v5 e2e 스크립트 (`scripts/dev-e2e-register-all.ts`) 의 hardcoded PAGES 11개 stale 사고 학습. checkout 3건 (코드 없는 미래 가정) + label 11개 누락 사고 → 자동 디스커버리 영구 fix.
+- **2026-05-19 v0.5.0** DOM serialization 도입 — PNG 캡처 → outerHTML + computed CSS 추출. board iframe srcdoc 으로 Figma prototype 같이 렌더 (텍스트 select · hover · 줌 · 애니메이션 OK). 서버 측 DOMPurify sanitize + iframe sandbox + CSP 3-layer 격리.
+- **2026-05-19 v0.6.0** 자동 group 매핑 — register 시 groupId 박힘 → Wireframe.groupId 즉시 set. Step 3-A 에서 사용된 카테고리만 group 자동 신설 (마케팅/인증/대시보드/온보딩/보드). 사용자가 board UI 에서 화면을 카테고리별 column 으로 보게 됨. dev-e2e-register-all.ts e2e 검증 통과 (22 화면 + 5 그룹).
+- **2026-05-19 v0.7.0** 2 contexts 분기 (PS 진단 박힘) — 사용자 사고: auth/login 캡처가 dashboard 본문으로 박힘. 원인: 모든 페이지를 인증 cookies 박힌 채 캡처 → 비인증 페이지가 서버 redirect. 해결: group 기반 분기 (marketing/auth = fresh / 그 외 = authed) + React hydration networkidle+1s wait. ScreenCard footer label 우선 표시 (영문 screenId 노출 차단).
+- **2026-05-19 v0.8.0** light/dark theme 보존 — 사용자 사고: 카드 미리보기에 흰색 영역 노출. 원인: server buildIframeSrcdoc 가 새 `<html lang="ko">` 으로 wrap → 원본 `<html class="light">` class 잃음 → CSS theme vars 잘못 매핑. 해결: server 측 원본 html 그대로 보존 + head 안 base/CSP/css inject. MCP skill 측 `document.documentElement.outerHTML` (html 통째) 사용 명시 — body 만 뽑으면 X. 사용자 실 화면과 동일한 theme 표현.
+- **2026-05-19 v0.9.0** iframe 안 click → board 카드 jump — 사용자 사고: 확대 modal 안 link 클릭 시 iframe 자체 navigation (카드 안 화면만 바뀜). 사용자 의도: 우리 board 의 해당 route 카드로 jump. 해결 (3 layer): (1) server buildIframeSrcdoc 가 nonce 박힌 inject script 추가 — anchor click + form submit 가로채서 postMessage. (2) iframe sandbox `""` → `"allow-scripts"` + CSP `script-src 'nonce-XXX'` (사용자 script 차단 · 우리 script 만 허용). (3) InfiniteCanvasView 의 message listener — href → pathname → locale 제거 → wireframe.route 매칭 → setDetailScreenId jump. MCP plugin 자체 코드 변경 X (server 측 + 클라이언트 측 변경만).
+- **2026-05-19 v0.10.0** Next.js Server Action hidden input 노출 차단 — 사용자 사고: 화면 미리보기에 base64 string 가득 + 흰 textbox. 진단: `<input name="user-content-$ACTION_*">` 가 type="hidden" 누락된 채 박힘 → default type="text" → encrypted ref string 노출. 해결: server buildIframeSrcdoc 의 inject CSS 에 `input[name*="$ACTION"], input[name*="$STATE"], input[name^="user-content-$"] { display: none !important }` 강제 숨김. 사용자 실 입력 form (email/password) 영향 X.
+- **2026-05-19 v0.11.0** harness 검수 9 사고 일괄 fix — Reviewer/Security/Auditor 3 agent 검수. Security HIGH (2): nonce Math.random → crypto.randomBytes / xlink:href 미차단 → stripUrlAttrThreats 확장. MEDIUM (4): srcset/ping/poster · entity-encoded URL · CSP img-src 도메인 제한 · postMessage origin (ancestorOrigins[0] fallback). LOW (3): keydown preventDefault · input typing 중 화살표 차단 · scroll MAX_ITER 200.
+- **2026-05-19 v0.12.0** modal sub-screen capture — 사용자 명시 ("약관 동의 같은 곳 '전체 보기' 버튼 modal"). page.evaluate 안 trigger 후보 자동 탐색 (aria-haspopup=dialog · 약관/전체보기/자세히/정책/Terms/Privacy 텍스트) → 각 click → [role=dialog]|dialog 추출 → ESC close. 최대 5 modal/page. register-screen.service 가 input.screen.modals 받으면 별도 Wireframe row 생성 (screenId = "<parent>/modal-<idx>" · layout.parentScreenId 박음 · 같은 group). 사용자 자신 app 에 trigger button 박혀있으면 자동 박힘.
+- **2026-05-19 v0.13.0** harness 재검수 8 사고 fix — modal capture 보안 + UX 강화. Security HIGH (2): trigger keyword 광범 매칭 폐기 → aria-haspopup="dialog" · data-specnote-modal-trigger 만 (사용자 page 정상 CTA false positive 차단) / fragment #modal-N → #specnote-modal-N (anchor 충돌 차단). MEDIUM (3): modal html 1MB → 256KB · max 5 → 3 / spec 당 modal cap 30개 / React synthetic event 보강 (dispatchEvent + click). Reviewer LOW (2): modalChildrenMap memoized 사용 / modal-N suffix 결정적 sort. 추가: register-screen.service modal 생성 실패 시 result.warnings 박음. InfiniteCanvasView hover preview JSX 중복 제거.
+- **2026-05-19 v0.14.0** harness 3rd 검수 7 사고 fix — Security HIGH (2): test-modal page prod 차단 (NODE_ENV gate) + sourceUrl host/scheme 검증 (path-only 강제 — SSRF 차단). Security MEDIUM (1): generateCuid crypto.randomBytes. Reviewer (2): register UPDATE 분기 modal 처리 누락 fix + dev-e2e folderRules test-modal 추가. test-modal page 신설 (Radix Dialog 검증 전용) — capture e2e 풀 사이클 통과 (DB 박힘 modal-1/modal-2).
+- **2026-05-19 v0.15.0** A tier 일괄 (streaming SSR + multi-viewport + form filled) + harness 4th 검수 fix + variant UI. wave 31: MutationObserver idle wait (DOM mutation 1s 동안 0 시까지 · 최대 8s) — Suspense fallback skeleton 사라짐 안정 wait. wave 32: mobile viewport (375×667) capture + setViewportSize + page.reload + waitForLoadState (useWindowSize · SSR conditional rendering 정합). wave 33: form-filled state — input/textarea type 별 dummy value 박음. Security HIGH 사고 fix: dispatchEvent(input/change) 폐기 — auto-submit 차단 + DOM value 만 변경 (캡처는 작동). wave 34 harness 4th 7 fix: variant UPDATE 분기 처리 + admin/debug URL 차단 + VARIANT_CAP 20→8 + variant size 512KB→256KB. wave 35: ScreenCard 우상단 "📱 모바일" · "✏️ Form" badge (modal pattern 정합). 사용자 자체 app capture 시 mobile + form-filled variant 자동 생성.
+- **2026-05-19 v0.16.0** form-error variant + e2e log 강화 (A tier 완성) — wave 36 form-error state: invalid value (email=invalid-not-email · password=1 · tel/url=abc · date=9999-99-99 · 기타=빈) 박음. dispatchEvent X (auto-submit 차단). wave 37 e2e log: captured 시점 variants 갯수 + kinds 표시 + register warnings 표시. wave 35 ScreenCard 우상단 "📱 모바일" · "✏️ Form" · (form-error 도) badge. spec 당 VARIANT_CAP 12 (mobile + form-filled + form-error × 4 spec).
